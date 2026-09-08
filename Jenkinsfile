@@ -4,6 +4,10 @@ pipeline {
         label 'linux-agent'
     }
 
+    environment {
+        DOCKER_IMAGE = 'krati07/jenkins-docker-practical'
+    }
+
     stages {
 
         stage('Checkout') {
@@ -15,7 +19,7 @@ pipeline {
         stage('Verify Files') {
             steps {
                 sh '''
-                    echo "Current directory:"
+                    echo "Workspace:"
                     pwd
 
                     echo "Files:"
@@ -27,15 +31,33 @@ pipeline {
         stage('Build Docker Image') {
             steps {
                 sh '''
-                    docker build -t myapp:1.0 .
+                    docker build -t ${DOCKER_IMAGE}:${BUILD_NUMBER} .
                 '''
             }
         }
 
-        stage('Verify Docker Image') {
+        stage('Login to Docker Hub') {
+            steps {
+                withCredentials([
+                    usernamePassword(
+                        credentialsId: 'dockerhub-credentials',
+                        usernameVariable: 'DOCKER_USERNAME',
+                        passwordVariable: 'DOCKER_PASSWORD'
+                    )
+                ]) {
+                    sh '''
+                        echo "$DOCKER_PASSWORD" | docker login \
+                            --username "$DOCKER_USERNAME" \
+                            --password-stdin
+                    '''
+                }
+            }
+        }
+
+        stage('Push Docker Image') {
             steps {
                 sh '''
-                    docker images myapp
+                    docker push ${DOCKER_IMAGE}:${BUILD_NUMBER}
                 '''
             }
         }
