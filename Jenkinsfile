@@ -4,8 +4,16 @@ pipeline {
         label 'linux-agent'
     }
 
+    parameters {
+        choice(
+            name: 'ENVIRONMENT',
+            choices: ['stage', 'prod'],
+            description: 'Select the environment'
+        )
+    }
+
     environment {
-        DOCKER_IMAGE = 'krati07/jenkins-docker-practical'
+        DOCKER_IMAGE = '<YOUR_DOCKER_USERNAME>/jenkins-docker-practical'
     }
 
     stages {
@@ -19,6 +27,7 @@ pipeline {
         stage('Verify Files') {
             steps {
                 sh '''
+                    echo "Environment: ${ENVIRONMENT}"
                     echo "Workspace:"
                     pwd
 
@@ -31,7 +40,9 @@ pipeline {
         stage('Build Docker Image') {
             steps {
                 sh '''
-                    docker build -t ${DOCKER_IMAGE}:${BUILD_NUMBER} .
+                    docker build \
+                        -t ${DOCKER_IMAGE}:${BUILD_NUMBER} \
+                        .
                 '''
             }
         }
@@ -54,13 +65,49 @@ pipeline {
             }
         }
 
-        stage('Push Docker Image') {
+        stage('Push to Docker Hub - Stage') {
+            when {
+                environment name: 'ENVIRONMENT', value: 'stage'
+            }
+
             steps {
+                echo 'Stage environment selected.'
+                echo 'Pushing image automatically...'
+
                 sh '''
                     docker push ${DOCKER_IMAGE}:${BUILD_NUMBER}
                 '''
             }
         }
 
+        stage('Production Approval') {
+            when {
+                environment name: 'ENVIRONMENT', value: 'prod'
+            }
+
+            input {
+                message "Production deployment requires approval. Push Docker image ${DOCKER_IMAGE}:${BUILD_NUMBER}?"
+                ok "Approve and Push"
+                submitter "admin"
+            }
+
+            steps {
+                echo 'Production deployment approved.'
+            }
+        }
+
+        stage('Push to Docker Hub - Prod') {
+            when {
+                environment name: 'ENVIRONMENT', value: 'prod'
+            }
+
+            steps {
+                echo 'Pushing production image...'
+
+                sh '''
+                    docker push ${DOCKER_IMAGE}:${BUILD_NUMBER}
+                '''
+            }
+        }
     }
 }
