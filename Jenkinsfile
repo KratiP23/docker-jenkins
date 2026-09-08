@@ -24,16 +24,10 @@ pipeline {
             }
         }
 
-        stage('Verify Files') {
+        stage('Verify Environment') {
             steps {
-                sh '''
-                    echo "Environment: ${ENVIRONMENT}"
-                    echo "Workspace:"
-                    pwd
-
-                    echo "Files:"
-                    ls -la
-                '''
+                echo "Selected environment: ${params.ENVIRONMENT}"
+                echo "Docker image: ${env.DOCKER_IMAGE}"
             }
         }
 
@@ -66,13 +60,15 @@ pipeline {
         }
 
         stage('Push to Docker Hub - Stage') {
+
             when {
-                environment name: 'ENVIRONMENT', value: 'stage'
+                expression {
+                    params.ENVIRONMENT == 'stage'
+                }
             }
 
             steps {
-                echo 'Stage environment selected.'
-                echo 'Pushing image automatically...'
+                echo "Stage selected - pushing automatically."
 
                 sh '''
                     docker push ${DOCKER_IMAGE}:${BUILD_NUMBER}
@@ -81,28 +77,33 @@ pipeline {
         }
 
         stage('Production Approval') {
+
             when {
-                environment name: 'ENVIRONMENT', value: 'prod'
+                expression {
+                    params.ENVIRONMENT == 'prod'
+                }
             }
 
             input {
-                message "Production deployment requires approval. Push Docker image ${DOCKER_IMAGE}:${BUILD_NUMBER}?"
+                message "Production deployment requires approval. Push ${DOCKER_IMAGE}:${BUILD_NUMBER}?"
                 ok "Approve and Push"
-                submitter "admin"
             }
 
             steps {
-                echo 'Production deployment approved.'
+                echo "Production deployment approved."
             }
         }
 
         stage('Push to Docker Hub - Prod') {
+
             when {
-                environment name: 'ENVIRONMENT', value: 'prod'
+                expression {
+                    params.ENVIRONMENT == 'prod'
+                }
             }
 
             steps {
-                echo 'Pushing production image...'
+                echo "Production approved - pushing image."
 
                 sh '''
                     docker push ${DOCKER_IMAGE}:${BUILD_NUMBER}
