@@ -13,7 +13,7 @@ pipeline {
     }
 
     environment {
-        DOCKER_IMAGE = '<YOUR_DOCKER_USERNAME>/jenkins-docker-practical'
+        DOCKER_IMAGE = 'krati07/jenkins-docker-practical'
     }
 
     stages {
