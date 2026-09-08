@@ -13,7 +13,7 @@ pipeline {
     }
 
     environment {
-        DOCKER_IMAGE = 'krati07/jenkins-docker-practical'
+        DOCKER_IMAGE = '<YOUR_DOCKER_USERNAME>/jenkins-docker-practical'
     }
 
     stages {
@@ -34,9 +34,7 @@ pipeline {
         stage('Build Docker Image') {
             steps {
                 sh '''
-                    docker build \
-                        -t ${DOCKER_IMAGE}:${BUILD_NUMBER} \
-                        .
+                    docker build -t ${DOCKER_IMAGE}:${BUILD_NUMBER} .
                 '''
             }
         }
@@ -68,7 +66,8 @@ pipeline {
             }
 
             steps {
-                echo "Stage selected - pushing automatically."
+                echo 'Stage environment selected.'
+                echo 'Pushing image automatically...'
 
                 sh '''
                     docker push ${DOCKER_IMAGE}:${BUILD_NUMBER}
@@ -85,12 +84,12 @@ pipeline {
             }
 
             input {
-                message "Production deployment requires approval. Push ${DOCKER_IMAGE}:${BUILD_NUMBER}?"
-                ok "Approve and Push"
+                message 'Production deployment requires approval. Continue?'
+                ok 'Approve and Push'
             }
 
             steps {
-                echo "Production deployment approved."
+                echo 'Production deployment approved.'
             }
         }
 
@@ -103,7 +102,8 @@ pipeline {
             }
 
             steps {
-                echo "Production approved - pushing image."
+                echo 'Production approved.'
+                echo 'Pushing image to Docker Hub...'
 
                 sh '''
                     docker push ${DOCKER_IMAGE}:${BUILD_NUMBER}
