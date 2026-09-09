@@ -8,12 +8,12 @@ pipeline {
         choice(
             name: 'ENVIRONMENT',
             choices: ['stage', 'prod'],
-            description: 'Select the environment'
+            description: 'Select the deployment environment'
         )
     }
 
     environment {
-        DOCKER_IMAGE = 'krati07/jenkins-docker-practical'
+        DOCKER_IMAGE = '<YOUR_DOCKER_USERNAME>/jenkins-docker-practical'
     }
 
     stages {
@@ -24,17 +24,27 @@ pipeline {
             }
         }
 
-        stage('Verify Environment') {
+        stage('Show Environment') {
             steps {
-                echo "Selected environment: ${params.ENVIRONMENT}"
-                echo "Docker image: ${env.DOCKER_IMAGE}"
+                echo "================================="
+                echo "Selected Environment: ${params.ENVIRONMENT}"
+                echo "Docker Image: ${env.DOCKER_IMAGE}"
+                echo "Build Number: ${env.BUILD_NUMBER}"
+                echo "================================="
             }
         }
 
         stage('Build Docker Image') {
             steps {
                 sh '''
-                    docker build -t ${DOCKER_IMAGE}:${BUILD_NUMBER} .
+                    echo "Building Docker image..."
+
+                    docker build \
+                        -t ${DOCKER_IMAGE}:${BUILD_NUMBER} \
+                        .
+
+                    echo "Docker image built:"
+                    docker images ${DOCKER_IMAGE}
                 '''
             }
         }
@@ -57,58 +67,70 @@ pipeline {
             }
         }
 
-        stage('Push to Docker Hub - Stage') {
-
-            when {
-                expression {
-                    params.ENVIRONMENT == 'stage'
-                }
-            }
-
+        stage('Deploy') {
             steps {
-                echo 'Stage environment selected.'
-                echo 'Pushing image automatically...'
 
-                sh '''
-                    docker push ${DOCKER_IMAGE}:${BUILD_NUMBER}
-                '''
+                script {
+
+                    if (params.ENVIRONMENT == 'stage') {
+
+                        echo "================================="
+                        echo "STAGE ENVIRONMENT"
+                        echo "No approval required."
+                        echo "Pushing image automatically..."
+                        echo "================================="
+
+                        sh '''
+                            docker push ${DOCKER_IMAGE}:${BUILD_NUMBER}
+                        '''
+
+                        echo "Stage image pushed successfully."
+
+                    } else if (params.ENVIRONMENT == 'prod') {
+
+                        echo "================================="
+                        echo "PRODUCTION ENVIRONMENT"
+                        echo "Approval is required."
+                        echo "================================="
+
+                        input(
+                            message: "Approve production image ${env.BUILD_NUMBER}?",
+                            ok: "Approve and Push",
+                            cancel: "Reject"
+                        )
+
+                        echo "Production deployment approved."
+
+                        sh '''
+                            docker push ${DOCKER_IMAGE}:${BUILD_NUMBER}
+                        '''
+
+                        echo "Production image pushed successfully."
+
+                    } else {
+
+                        error("Invalid environment selected: ${params.ENVIRONMENT}")
+
+                    }
+                }
             }
         }
+    }
 
-        stage('Production Approval') {
-
-            when {
-                expression {
-                    params.ENVIRONMENT == 'prod'
-                }
-            }
-
-            input {
-                message 'Production deployment requires approval. Continue?'
-                ok 'Approve and Push'
-            }
-
-            steps {
-                echo 'Production deployment approved.'
-            }
+    post {
+        success {
+            echo "================================="
+            echo "PIPELINE SUCCESS"
+            echo "Environment: ${params.ENVIRONMENT}"
+            echo "Image: ${env.DOCKER_IMAGE}:${env.BUILD_NUMBER}"
+            echo "================================="
         }
 
-        stage('Push to Docker Hub - Prod') {
-
-            when {
-                expression {
-                    params.ENVIRONMENT == 'prod'
-                }
-            }
-
-            steps {
-                echo 'Production approved.'
-                echo 'Pushing image to Docker Hub...'
-
-                sh '''
-                    docker push ${DOCKER_IMAGE}:${BUILD_NUMBER}
-                '''
-            }
+        failure {
+            echo "================================="
+            echo "PIPELINE FAILED"
+            echo "Environment: ${params.ENVIRONMENT}"
+            echo "================================="
         }
     }
 }
