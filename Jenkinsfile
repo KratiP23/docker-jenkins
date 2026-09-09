@@ -4,35 +4,33 @@ pipeline {
         label 'linux-agent'
     }
 
+    parameters {
+        choice(
+            name: 'ENVIRONMENT',
+            choices: ['stage', 'prod'],
+            description: 'Select the deployment environment'
+        )
+    }
+
     environment {
-        IMAGE_REPO = 'krati07/jenkins-docker-demo'
-        IMAGE_TAG  = "build-${BUILD_NUMBER}"
+        DOCKER_IMAGE = 'krati07/jenkins-docker-demo'
     }
 
     stages {
 
         stage('Checkout') {
             steps {
-                echo 'Checking out source code...'
                 checkout scm
             }
         }
 
-        stage('Docker Check') {
+        stage('Show Environment') {
             steps {
-                sh '''
-                    echo "================================="
-                    echo "Docker version"
-                    echo "================================="
-
-                    docker --version
-
-                    echo "================================="
-                    echo "Docker info"
-                    echo "================================="
-
-                    docker info
-                '''
+                echo "================================="
+                echo "Selected Environment: ${params.ENVIRONMENT}"
+                echo "Docker Image: ${env.DOCKER_IMAGE}"
+                echo "Build Number: ${env.BUILD_NUMBER}"
+                echo "================================="
             }
         }
 
@@ -43,22 +41,20 @@ pipeline {
                     echo "Building Docker image"
                     echo "================================="
 
-                    echo "Repository: ${IMAGE_REPO}"
-                    echo "Tag: ${IMAGE_TAG}"
-
                     docker build \
-                        -t ${IMAGE_REPO}:${IMAGE_TAG} \
+                        -t ${DOCKER_IMAGE}:${BUILD_NUMBER} \
                         .
 
                     echo "Docker image built successfully."
 
-                    docker images ${IMAGE_REPO}
+                    docker images ${DOCKER_IMAGE}
                 '''
             }
         }
 
-        stage('Docker Login') {
+        stage('Login to Docker Hub') {
             steps {
+
                 withCredentials([
                     usernamePassword(
                         credentialsId: 'dockerhub-credentials',
@@ -68,29 +64,71 @@ pipeline {
                 ]) {
 
                     sh '''
+                        echo "Logging in to Docker Hub..."
+
                         echo "$DOCKER_PASSWORD" | docker login \
                             --username "$DOCKER_USERNAME" \
                             --password-stdin
+
+                        echo "Docker Hub login successful."
                     '''
                 }
             }
         }
 
-        stage('Push Image') {
+        stage('Deploy') {
             steps {
-                sh '''
-                    echo "================================="
-                    echo "Pushing Docker image"
-                    echo "================================="
 
-                    echo "Pushing: ${IMAGE_REPO}:${IMAGE_TAG}"
+                script {
 
-                    docker push ${IMAGE_REPO}:${IMAGE_TAG}
+                    if (params.ENVIRONMENT == 'stage') {
 
-                    echo "================================="
-                    echo "IMAGE PUSH SUCCESSFUL"
-                    echo "================================="
-                '''
+                        echo "================================="
+                        echo "STAGE ENVIRONMENT"
+                        echo "No approval required."
+                        echo "Pushing image automatically..."
+                        echo "================================="
+
+                        sh '''
+                            docker push ${DOCKER_IMAGE}:${BUILD_NUMBER}
+                        '''
+
+                        echo "================================="
+                        echo "Stage image pushed successfully."
+                        echo "Image: ${DOCKER_IMAGE}:${BUILD_NUMBER}"
+                        echo "================================="
+
+                    } else if (params.ENVIRONMENT == 'prod') {
+
+                        echo "================================="
+                        echo "PRODUCTION ENVIRONMENT"
+                        echo "Approval is required."
+                        echo "================================="
+
+                        input(
+                            message: "Approve production image ${env.BUILD_NUMBER}?",
+                            ok: "Approve and Push",
+                            cancel: "Reject"
+                        )
+
+                        echo "Production deployment approved."
+
+                        sh '''
+                            docker push ${DOCKER_IMAGE}:${BUILD_NUMBER}
+                        '''
+
+                        echo "================================="
+                        echo "Production image pushed successfully."
+                        echo "Image: ${DOCKER_IMAGE}:${BUILD_NUMBER}"
+                        echo "================================="
+
+                    } else {
+
+                        error(
+                            "Invalid environment selected: ${params.ENVIRONMENT}"
+                        )
+                    }
+                }
             }
         }
     }
@@ -100,13 +138,15 @@ pipeline {
         success {
             echo "================================="
             echo "PIPELINE SUCCESS"
-            echo "Image: ${IMAGE_REPO}:${IMAGE_TAG}"
+            echo "Environment: ${params.ENVIRONMENT}"
+            echo "Image: ${env.DOCKER_IMAGE}:${env.BUILD_NUMBER}"
             echo "================================="
         }
 
         failure {
             echo "================================="
             echo "PIPELINE FAILED"
+            echo "Environment: ${params.ENVIRONMENT}"
             echo "================================="
         }
     }
