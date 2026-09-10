@@ -46,10 +46,7 @@ pipeline {
                             )
                         ]) {
                             sh '''
-                                echo "$DOCKER_PASSWORD" | docker login \
-                                    -u "$DOCKER_USERNAME" \
-                                    --password-stdin
-
+                                echo "$DOCKER_PASSWORD" | docker login -u "$DOCKER_USERNAME" --password-stdin
                                 docker push ${DOCKER_IMAGE}:${BUILD_NUMBER}
                             '''
                         }
@@ -64,50 +61,42 @@ pipeline {
                         ]) {
 
                             sh '''
-                                echo "Requesting production approval..."
+                                echo "Triggering GitHub approval workflow..."
 
-                                curl -sS --fail-with-body \
-                                    -X POST \
+                                curl -s -X POST \
                                     -H "Accept: application/vnd.github+json" \
                                     -H "Authorization: Bearer $GITHUB_TOKEN" \
-                                    -H "X-GitHub-Api-Version: 2026-03-10" \
                                     "https://api.github.com/repos/${GITHUB_REPO}/actions/workflows/${GITHUB_WORKFLOW}/dispatches" \
                                     -d '{"ref":"main","inputs":{"image_tag":"'"${BUILD_NUMBER}"'"}}'
-                            '''
 
-                            echo "Waiting for GitHub approval..."
+                                sleep 10
 
-                            sh '''
-                                sleep 5
+                                echo "Waiting for approval..."
 
-                                for i in $(seq 1 60); do
-
-                                    RESULT=$(curl -sS \
+                                for i in $(seq 1 30); do
+                                    RESULT=$(curl -s \
                                         -H "Accept: application/vnd.github+json" \
                                         -H "Authorization: Bearer $GITHUB_TOKEN" \
-                                        -H "X-GitHub-Api-Version: 2026-03-10" \
-                                        "https://api.github.com/repos/${GITHUB_REPO}/actions/workflows/${GITHUB_WORKFLOW}/runs?event=workflow_dispatch&per_page=1")
+                                        "https://api.github.com/repos/${GITHUB_REPO}/actions/workflows/${GITHUB_WORKFLOW}/runs?per_page=1")
 
-                                    STATUS=$(python3 -c 'import sys,json; print(json.load(sys.stdin)["workflow_runs"][0]["status"])' <<< "$RESULT")
+                                    CONCLUSION=$(echo "$RESULT" | python3 -c "import sys,json; d=json.load(sys.stdin)['workflow_runs']; print(d[0]['conclusion'] or '' if d else '')")
 
-                                    CONCLUSION=$(python3 -c 'import sys,json; print(json.load(sys.stdin)["workflow_runs"][0]["conclusion"] or "")' <<< "$RESULT")
-
-                                    echo "GitHub workflow: $STATUS $CONCLUSION"
+                                    echo "Status check $i: $CONCLUSION"
 
                                     if [ "$CONCLUSION" = "success" ]; then
-                                        echo "Production approved."
+                                        echo "Approved!"
                                         exit 0
                                     fi
 
                                     if [ "$CONCLUSION" = "failure" ] || [ "$CONCLUSION" = "cancelled" ]; then
-                                        echo "Production approval failed or was rejected."
+                                        echo "Rejected."
                                         exit 1
                                     fi
 
                                     sleep 10
                                 done
 
-                                echo "Timed out waiting for GitHub approval."
+                                echo "Timed out waiting for approval."
                                 exit 1
                             '''
                         }
@@ -120,18 +109,9 @@ pipeline {
                             )
                         ]) {
                             sh '''
-                                echo "$DOCKER_PASSWORD" | docker login \
-                                    -u "$DOCKER_USERNAME" \
-                                    --password-stdin
-
-                                echo "Approval received. Pushing image..."
-
+                                echo "$DOCKER_PASSWORD" | docker login -u "$DOCKER_USERNAME" --password-stdin
                                 docker push ${DOCKER_IMAGE}:${BUILD_NUMBER}
-
-                                docker tag \
-                                    ${DOCKER_IMAGE}:${BUILD_NUMBER} \
-                                    ${DOCKER_IMAGE}:prod
-
+                                docker tag ${DOCKER_IMAGE}:${BUILD_NUMBER} ${DOCKER_IMAGE}:prod
                                 docker push ${DOCKER_IMAGE}:prod
                             '''
                         }
