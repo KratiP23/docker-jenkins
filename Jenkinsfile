@@ -14,6 +14,8 @@ pipeline {
 
     environment {
         DOCKER_IMAGE = 'krati07/jenkins-docker-demo'
+        GITHUB_REPO = 'KratiP23/docker-Jenkins'
+        GITHUB_WORKFLOW = 'promote-prod.yml'
     }
 
     stages {
@@ -100,29 +102,45 @@ pipeline {
 
                     } else if (params.ENVIRONMENT == 'prod') {
 
-                        echo "================================="
-                        echo "PRODUCTION ENVIRONMENT"
-                        echo "Approval is required."
-                        echo "================================="
+                    echo "Production environment selected."
+                    echo "Pushing build image and requesting GitHub approval..."
 
-                        input(
-                            message: "Approve production image ${env.BUILD_NUMBER}?",
-                            ok: "Approve and Push",
-                            cancel: "Reject"
+                    withCredentials([
+                        usernamePassword(
+                            credentialsId: 'dockerhub-credentials',
+                            usernameVariable: 'DOCKER_USERNAME',
+                            passwordVariable: 'DOCKER_PASSWORD'
+                        ),
+                        string(
+                            credentialsId: 'github-actions-token',
+                            variable: 'GITHUB_TOKEN'
                         )
-
-                        echo "Production deployment approved."
+                    ]) {
 
                         sh '''
+                            echo "$DOCKER_PASSWORD" | docker login \
+                                --username "$DOCKER_USERNAME" \
+                                --password-stdin
+
+                            echo "Pushing build image..."
+
                             docker push ${DOCKER_IMAGE}:${BUILD_NUMBER}
+
+                            echo "Triggering GitHub Actions..."
+
+                            curl -L \
+                                -X POST \
+                                -H "Accept: application/vnd.github+json" \
+                                -H "Authorization: Bearer $GITHUB_TOKEN" \
+                                -H "X-GitHub-Api-Version: 2026-03-10" \
+                                https://api.github.com/repos/${GITHUB_REPO}/actions/workflows/${GITHUB_WORKFLOW}/dispatches \
+                                -d "{\"ref\":\"main\",\"inputs\":{\"image_tag\":\"${BUILD_NUMBER}\"}}"
+
+                            echo "GitHub production workflow triggered."
+                            echo "Waiting for reviewer approval in GitHub."
                         '''
-
-                        echo "================================="
-                        echo "Production image pushed successfully."
-                        echo "Image: ${DOCKER_IMAGE}:${BUILD_NUMBER}"
-                        echo "================================="
-
-                    } else {
+                    }
+                } else {
 
                         error(
                             "Invalid environment selected: ${params.ENVIRONMENT}"
