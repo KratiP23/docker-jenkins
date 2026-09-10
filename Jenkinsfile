@@ -8,7 +8,7 @@ pipeline {
         choice(
             name: 'ENVIRONMENT',
             choices: ['stage', 'prod'],
-            description: 'Select the deployment environment'
+            description: 'Select deployment environment'
         )
     }
 
@@ -26,125 +26,69 @@ pipeline {
             }
         }
 
-        stage('Show Environment') {
-            steps {
-                echo "================================="
-                echo "Selected Environment: ${params.ENVIRONMENT}"
-                echo "Docker Image: ${env.DOCKER_IMAGE}"
-                echo "Build Number: ${env.BUILD_NUMBER}"
-                echo "================================="
-            }
-        }
-
         stage('Build Docker Image') {
             steps {
                 sh '''
-                    echo "================================="
-                    echo "Building Docker image"
-                    echo "================================="
-
-                    docker build \
-                        -t ${DOCKER_IMAGE}:${BUILD_NUMBER} \
-                        .
-
-                    echo "Docker image built successfully."
-
-                    docker images ${DOCKER_IMAGE}
+                    docker build -t ${DOCKER_IMAGE}:${BUILD_NUMBER} .
                 '''
-            }
-        }
-
-        stage('Login to Docker Hub') {
-            steps {
-
-                withCredentials([
-                    usernamePassword(
-                        credentialsId: 'dockerhub-credentials',
-                        usernameVariable: 'DOCKER_USERNAME',
-                        passwordVariable: 'DOCKER_PASSWORD'
-                    )
-                ]) {
-
-                    sh '''
-                        echo "Logging in to Docker Hub..."
-
-                        echo "$DOCKER_PASSWORD" | docker login \
-                            --username "$DOCKER_USERNAME" \
-                            --password-stdin
-
-                        echo "Docker Hub login successful."
-                    '''
-                }
             }
         }
 
         stage('Deploy') {
             steps {
-
                 script {
 
                     if (params.ENVIRONMENT == 'stage') {
 
-                        echo "================================="
-                        echo "STAGE ENVIRONMENT"
-                        echo "No approval required."
-                        echo "Pushing image automatically..."
-                        echo "================================="
+                        echo "Deploying to stage..."
 
-                        sh '''
-                            docker push ${DOCKER_IMAGE}:${BUILD_NUMBER}
-                        '''
+                        withCredentials([
+                            usernamePassword(
+                                credentialsId: 'dockerhub-credentials',
+                                usernameVariable: 'DOCKER_USERNAME',
+                                passwordVariable: 'DOCKER_PASSWORD'
+                            )
+                        ]) {
+                            sh '''
+                                echo "$DOCKER_PASSWORD" | docker login \
+                                    --username "$DOCKER_USERNAME" \
+                                    --password-stdin
 
-                        echo "================================="
-                        echo "Stage image pushed successfully."
-                        echo "Image: ${DOCKER_IMAGE}:${BUILD_NUMBER}"
-                        echo "================================="
+                                docker push ${DOCKER_IMAGE}:${BUILD_NUMBER}
+                            '''
+                        }
 
                     } else if (params.ENVIRONMENT == 'prod') {
 
-                    echo "Production environment selected."
-                    echo "Pushing build image and requesting GitHub approval..."
+                        echo "Preparing production deployment..."
 
-                    withCredentials([
-                        usernamePassword(
-                            credentialsId: 'dockerhub-credentials',
-                            usernameVariable: 'DOCKER_USERNAME',
-                            passwordVariable: 'DOCKER_PASSWORD'
-                        ),
-                        string(
-                            credentialsId: 'github-actions-token',
-                            variable: 'GITHUB_TOKEN'
-                        )
-                    ]) {
+                        withCredentials([
+                            usernamePassword(
+                                credentialsId: 'dockerhub-credentials',
+                                usernameVariable: 'DOCKER_USERNAME',
+                                passwordVariable: 'DOCKER_PASSWORD'
+                            ),
+                            string(
+                                credentialsId: 'github-actions-token',
+                                variable: 'GITHUB_TOKEN'
+                            )
+                        ]) {
+                            sh '''
+                                echo "$DOCKER_PASSWORD" | docker login \
+                                    --username "$DOCKER_USERNAME" \
+                                    --password-stdin
 
-                        sh '''
-                            echo "$DOCKER_PASSWORD" | docker login \
-                                --username "$DOCKER_USERNAME" \
-                                --password-stdin
+                                docker push ${DOCKER_IMAGE}:${BUILD_NUMBER}
 
-                            echo "Pushing build image..."
-
-                            docker push ${DOCKER_IMAGE}:${BUILD_NUMBER}
-
-                            echo "Triggering GitHub Actions..."
-
-                            curl -L \
-                                -X POST \
-                                -H "Accept: application/vnd.github+json" \
-                                -H "Authorization: Bearer $GITHUB_TOKEN" \
-                                -H "X-GitHub-Api-Version: 2026-03-10" \
-                                https://api.github.com/repos/${GITHUB_REPO}/actions/workflows/${GITHUB_WORKFLOW}/dispatches \
-                                -d "{\"ref\":\"main\",\"inputs\":{\"image_tag\":\"${BUILD_NUMBER}\"}}"
-
-                            echo "GitHub production workflow triggered."
-                            echo "Waiting for reviewer approval in GitHub."
-                        '''
-                    }
-                } else {
-
-                        error(
-                            "Invalid environment selected: ${params.ENVIRONMENT}"
-                        )
+                                curl -L --fail-with-body \
+                                    -X POST \
+                                    -H "Accept: application/vnd.github+json" \
+                                    -H "Authorization: Bearer $GITHUB_TOKEN" \
+                                    -H "X-GitHub-Api-Version: 2026-03-10" \
+                                    "https://api.github.com/repos/${GITHUB_REPO}/actions/workflows/${GITHUB_WORKFLOW}/dispatches" \
+                                    --data '{"ref":"main","inputs":{"image_tag":"'"${BUILD_NUMBER}"'"}}'
+                            '''
+                        }
                     }
                 }
             }
@@ -152,20 +96,14 @@ pipeline {
     }
 
     post {
-
         success {
-            echo "================================="
             echo "PIPELINE SUCCESS"
             echo "Environment: ${params.ENVIRONMENT}"
-            echo "Image: ${env.DOCKER_IMAGE}:${env.BUILD_NUMBER}"
-            echo "================================="
+            echo "Image: ${DOCKER_IMAGE}:${BUILD_NUMBER}"
         }
 
         failure {
-            echo "================================="
             echo "PIPELINE FAILED"
-            echo "Environment: ${params.ENVIRONMENT}"
-            echo "================================="
         }
     }
 }
