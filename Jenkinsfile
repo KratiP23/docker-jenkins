@@ -14,7 +14,7 @@ pipeline {
 
     environment {
         DOCKER_IMAGE = 'krati07/jenkins-docker-demo'
-        GITHUB_REPO = 'KratiP23/docker-Jenkins'
+        GITHUB_REPO = 'KratiP23/docker-jenkins'
         GITHUB_WORKFLOW = 'promote-prod.yml'
     }
 
@@ -64,40 +64,50 @@ pipeline {
                         ]) {
 
                             sh '''
-                                curl -L --fail-with-body \
+                                echo "Requesting production approval..."
+
+                                curl -sS --fail-with-body \
                                     -X POST \
                                     -H "Accept: application/vnd.github+json" \
                                     -H "Authorization: Bearer $GITHUB_TOKEN" \
                                     -H "X-GitHub-Api-Version: 2026-03-10" \
                                     "https://api.github.com/repos/${GITHUB_REPO}/actions/workflows/${GITHUB_WORKFLOW}/dispatches" \
-                                    --data '{"ref":"main","inputs":{"image_tag":"'"${BUILD_NUMBER}"'"}}'
+                                    -d '{"ref":"main","inputs":{"image_tag":"'"${BUILD_NUMBER}"'"}}'
                             '''
 
-                            echo "GitHub approval requested."
-
-                            sleep 5
+                            echo "Waiting for GitHub approval..."
 
                             sh '''
-                                for i in $(seq 1 60)
-                                do
-                                    RESULT=$(curl -s \
+                                sleep 5
+
+                                for i in $(seq 1 60); do
+
+                                    RESULT=$(curl -sS \
+                                        -H "Accept: application/vnd.github+json" \
                                         -H "Authorization: Bearer $GITHUB_TOKEN" \
+                                        -H "X-GitHub-Api-Version: 2026-03-10" \
                                         "https://api.github.com/repos/${GITHUB_REPO}/actions/workflows/${GITHUB_WORKFLOW}/runs?event=workflow_dispatch&per_page=1")
 
-                                    STATUS=$(echo "$RESULT" | grep -o '"status":"[^"]*"' | head -1 | cut -d'"' -f4)
-                                    CONCLUSION=$(echo "$RESULT" | grep -o '"conclusion":"[^"]*"' | head -1 | cut -d'"' -f4)
+                                    STATUS=$(python3 -c 'import sys,json; print(json.load(sys.stdin)["workflow_runs"][0]["status"])' <<< "$RESULT")
+
+                                    CONCLUSION=$(python3 -c 'import sys,json; print(json.load(sys.stdin)["workflow_runs"][0]["conclusion"] or "")' <<< "$RESULT")
+
+                                    echo "GitHub workflow: $STATUS $CONCLUSION"
 
                                     if [ "$CONCLUSION" = "success" ]; then
+                                        echo "Production approved."
                                         exit 0
                                     fi
 
                                     if [ "$CONCLUSION" = "failure" ] || [ "$CONCLUSION" = "cancelled" ]; then
+                                        echo "Production approval failed or was rejected."
                                         exit 1
                                     fi
 
                                     sleep 10
                                 done
 
+                                echo "Timed out waiting for GitHub approval."
                                 exit 1
                             '''
                         }
@@ -113,6 +123,8 @@ pipeline {
                                 echo "$DOCKER_PASSWORD" | docker login \
                                     -u "$DOCKER_USERNAME" \
                                     --password-stdin
+
+                                echo "Approval received. Pushing image..."
 
                                 docker push ${DOCKER_IMAGE}:${BUILD_NUMBER}
 

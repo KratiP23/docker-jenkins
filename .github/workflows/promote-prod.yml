@@ -10,14 +10,11 @@ on:
 
 jobs:
   production-approval:
-    name: Production Approval
     runs-on: ubuntu-latest
 
     environment:
       name: production
 
     steps:
-      - name: Approval completed
-        run: |
-          echo "Production deployment approved."
-          echo "Jenkins build: ${{ inputs.image_tag }}"
+      - name: Production approved
+        run: echo "Production deployment approved for build ${{ inputs.image_tag }}"
