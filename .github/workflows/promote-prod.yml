@@ -1,44 +1,23 @@
-name: Promote Production Image
+name: Production Approval
 
 on:
   workflow_dispatch:
     inputs:
       image_tag:
-        description: "Docker image build tag from Jenkins"
+        description: "Jenkins build number"
         required: true
         type: string
 
 jobs:
-  promote:
-    name: Promote image to production
+  production-approval:
+    name: Production Approval
     runs-on: ubuntu-latest
 
     environment:
       name: production
 
     steps:
-      - name: Login to Docker Hub
+      - name: Approval completed
         run: |
-          echo "${{ secrets.DOCKERHUB_TOKEN }}" | docker login \
-            -u "${{ secrets.DOCKERHUB_USERNAME }}" \
-            --password-stdin
-
-      - name: Pull Jenkins image
-        run: |
-          docker pull ${{ secrets.DOCKERHUB_USERNAME }}/jenkins-docker-practical:${{ inputs.image_tag }}
-
-      - name: Tag image as production
-        run: |
-          docker tag \
-            ${{ secrets.DOCKERHUB_USERNAME }}/jenkins-docker-practical:${{ inputs.image_tag }} \
-            ${{ secrets.DOCKERHUB_USERNAME }}/jenkins-docker-practical:prod
-
-      - name: Push production image
-        run: |
-          docker push \
-            ${{ secrets.DOCKERHUB_USERNAME }}/jenkins-docker-practical:prod
-
-      - name: Production deployment completed
-        run: |
-          echo "Production image promoted successfully."
-          echo "Build tag: ${{ inputs.image_tag }}"
+          echo "Production deployment approved."
+          echo "Jenkins build: ${{ inputs.image_tag }}"
