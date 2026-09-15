@@ -1,44 +1,27 @@
 pipeline {
-
-    agent {
-        label 'linux-agent'
-    }
-
+    agent { label 'linux-agent' }
     environment {
-        DOCKER_IMAGE   = 'krati07/jenkins-docker-demo'
-        CODE_REPO_URL  = 'https://github.com/KratiP23/docker-jenkins-app.git'
+        DOCKER_IMAGE = 'krati07/jenkins-docker-demo'
+        CODE_REPO_URL = 'https://github.com/KratiP23/docker-jenkins-app.git'
     }
-
     stages {
-
         stage('Checkout code repo') {
             steps {
-                checkout([
-                    $class: 'GitSCM',
-                    branches: [[name: 'stage']],
-                    userRemoteConfigs: [[url: "${CODE_REPO_URL}"]]
-                ])
+                checkout([$class: 'GitSCM', branches: [[name: 'stage']],
+                          userRemoteConfigs: [[url: "${CODE_REPO_URL}"]]])
+                script { env.GIT_SHA = sh(script: 'git rev-parse --short HEAD', returnStdout: true).trim() }
             }
         }
-
         stage('Build') {
-            steps {
-                sh 'docker build -t ${DOCKER_IMAGE}:${BUILD_NUMBER} .'
-            }
+            steps { sh 'docker build -t ${DOCKER_IMAGE}:${GIT_SHA} .' }
         }
-
         stage('Push to Docker Hub') {
             steps {
-                withCredentials([
-                    usernamePassword(
-                        credentialsId: 'dockerhub-credentials',
-                        usernameVariable: 'DOCKER_USERNAME',
-                        passwordVariable: 'DOCKER_PASSWORD'
-                    )
-                ]) {
+                withCredentials([usernamePassword(credentialsId: 'dockerhub-credentials',
+                        usernameVariable: 'DOCKER_USERNAME', passwordVariable: 'DOCKER_PASSWORD')]) {
                     sh '''
                         echo "$DOCKER_PASSWORD" | docker login -u "$DOCKER_USERNAME" --password-stdin
-                        docker push ${DOCKER_IMAGE}:${BUILD_NUMBER}
+                        docker push ${DOCKER_IMAGE}:${GIT_SHA}
                     '''
                 }
             }
