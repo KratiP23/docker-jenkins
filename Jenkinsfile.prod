@@ -1,29 +1,171 @@
+// Jenkinsfile.prod  -  job: app-prod  -  lives in the docker-jenkins repo
+//
+// Does NOT build anything. The image that was built and tested on stage is the
+// image that goes to production - this job only works out which one it is,
+// waits for a human on GitHub to approve it, and then points the "prod" tag at
+// that same digest. No second image is ever created or uploaded.
+
 pipeline {
-    agent { label 'linux-agent' }
-    environment {
-        DOCKER_IMAGE = 'krati07/jenkins-docker-demo'
-        CODE_REPO_URL = 'https://github.com/KratiP23/docker-jenkins-app.git'
-    }
-    stages {
-        stage('Checkout code repo') {
-            steps {
-                checkout([$class: 'GitSCM', branches: [[name: 'main']],
-                          userRemoteConfigs: [[url: "${CODE_REPO_URL}"]]])
-                script { env.TESTED_SHA = sh(script: 'git rev-parse --short HEAD^2', returnStdout: true).trim() }
-            }
+  agent { label 'linux-agent' }
+
+  options {
+    timestamps()
+    disableConcurrentBuilds()
+    buildDiscarder(logRotator(numToKeepStr: '30'))
+  }
+
+  environment {
+    DOCKER_IMAGE    = 'krati07/jenkins-docker-demo'
+    CODE_REPO_URL   = 'https://github.com/KratiP23/docker-jenkins-app.git'
+    GITHUB_REPO     = 'KratiP23/docker-jenkins'
+    GITHUB_WORKFLOW = 'promote-prod.yml'
+    PROD_TAG        = 'prod'
+  }
+
+  stages {
+
+    stage('Checkout main') {
+      steps {
+        checkout([
+          $class: 'GitSCM',
+          branches: [[name: '*/main']],
+          userRemoteConfigs: [[url: "${CODE_REPO_URL}"]]
+        ])
+        script {
+          // A PR merge creates a merge commit whose second parent is the commit
+          // that stage built and tested. That is the image we promote.
+          env.IMAGE_TAG = 'sha-' + sh(returnStdout: true, script: '''
+            if git rev-parse --verify --quiet HEAD^2 >/dev/null; then
+              git rev-parse --short=12 HEAD^2
+            else
+              git rev-parse --short=12 HEAD
+            fi
+          ''').trim()
+          env.REQUEST_ID = "${JOB_NAME}-${BUILD_NUMBER}"
+          currentBuild.displayName = "#${BUILD_NUMBER} ${env.IMAGE_TAG}"
         }
-        stage('Pull tested image and promote to prod') {
-            steps {
-                withCredentials([usernamePassword(credentialsId: 'dockerhub-credentials',
-                        usernameVariable: 'DOCKER_USERNAME', passwordVariable: 'DOCKER_PASSWORD')]) {
-                    sh '''
-                        echo "$DOCKER_PASSWORD" | docker login -u "$DOCKER_USERNAME" --password-stdin
-                        docker pull ${DOCKER_IMAGE}:${TESTED_SHA}
-                        docker tag ${DOCKER_IMAGE}:${TESTED_SHA} ${DOCKER_IMAGE}:prod
-                        docker push ${DOCKER_IMAGE}:prod
-                    '''
-                }
-            }
-        }
+        echo "Promoting ${DOCKER_IMAGE}:${env.IMAGE_TAG}"
+      }
     }
+
+    stage('Verify the tested image exists') {
+      steps {
+        withCredentials([usernamePassword(
+          credentialsId: 'dockerhub-credentials',
+          usernameVariable: 'DOCKER_USERNAME',
+          passwordVariable: 'DOCKER_PASSWORD'
+        )]) {
+          sh '''
+            set +x
+            echo "$DOCKER_PASSWORD" | docker login -u "$DOCKER_USERNAME" --password-stdin
+            set -x
+
+            if ! docker manifest inspect "${DOCKER_IMAGE}:${IMAGE_TAG}" >/dev/null 2>&1; then
+              echo "No image tagged ${IMAGE_TAG} on Docker Hub."
+              echo "That commit was never built and verified by app-stage - refusing to promote."
+              exit 1
+            fi
+            echo "Found ${DOCKER_IMAGE}:${IMAGE_TAG} - this is the image that passed the stage smoke test."
+          '''
+        }
+      }
+    }
+
+    stage('Wait for approval on GitHub') {
+      options { timeout(time: 25, unit: 'MINUTES') }
+      steps {
+        withCredentials([string(credentialsId: 'github-token', variable: 'GITHUB_TOKEN')]) {
+          sh '''
+            set +x
+
+            echo "Requesting production approval for ${IMAGE_TAG} ..."
+            cat > dispatch.json <<EOF
+{"ref":"main","inputs":{"image_tag":"${IMAGE_TAG}","request_id":"${REQUEST_ID}"}}
+EOF
+            curl -s -o /dev/null -X POST \
+              -H "Accept: application/vnd.github+json" \
+              -H "Authorization: Bearer $GITHUB_TOKEN" \
+              "https://api.github.com/repos/${GITHUB_REPO}/actions/workflows/${GITHUB_WORKFLOW}/dispatches" \
+              --data @dispatch.json
+            rm -f dispatch.json
+
+            # Find OUR run by its request id, rather than assuming the newest
+            # run belongs to us - two builds could be in flight at once.
+            RUN_ID=""
+            for i in $(seq 1 12); do
+              sleep 5
+              RUN_ID=$(curl -s \
+                -H "Accept: application/vnd.github+json" \
+                -H "Authorization: Bearer $GITHUB_TOKEN" \
+                "https://api.github.com/repos/${GITHUB_REPO}/actions/workflows/${GITHUB_WORKFLOW}/runs?event=workflow_dispatch&per_page=30" \
+                | python3 -c "import sys,json,os
+req = os.environ['REQUEST_ID']
+runs = json.load(sys.stdin).get('workflow_runs', [])
+print(next((str(r['id']) for r in runs if req in (r.get('display_title') or '')), ''))")
+              [ -n "$RUN_ID" ] && break
+              echo "Run not visible yet ..."
+            done
+
+            if [ -z "$RUN_ID" ]; then
+              echo "GitHub never created the approval run."
+              exit 1
+            fi
+            echo "Approval run: https://github.com/${GITHUB_REPO}/actions/runs/${RUN_ID}"
+            echo "Waiting for a reviewer to approve it (checking every 20s) ..."
+
+            for i in $(seq 1 60); do
+              INFO=$(curl -s \
+                -H "Accept: application/vnd.github+json" \
+                -H "Authorization: Bearer $GITHUB_TOKEN" \
+                "https://api.github.com/repos/${GITHUB_REPO}/actions/runs/${RUN_ID}" \
+                | python3 -c "import sys,json
+d = json.load(sys.stdin)
+print(d.get('status') or '-', d.get('conclusion') or '-')")
+              STATUS="${INFO% *}"
+              CONCLUSION="${INFO#* }"
+              echo "check $i: status=$STATUS conclusion=$CONCLUSION"
+
+              case "$CONCLUSION" in
+                success)                     echo "Approved."; exit 0 ;;
+                failure|cancelled|timed_out) echo "Rejected or cancelled - nothing will be promoted."; exit 1 ;;
+              esac
+              sleep 20
+            done
+
+            echo "No one approved within 20 minutes."
+            exit 1
+          '''
+        }
+      }
+    }
+
+    stage('Promote to prod') {
+      steps {
+        withCredentials([usernamePassword(
+          credentialsId: 'dockerhub-credentials',
+          usernameVariable: 'DOCKER_USERNAME',
+          passwordVariable: 'DOCKER_PASSWORD'
+        )]) {
+          sh '''
+            set +x
+            echo "$DOCKER_PASSWORD" | docker login -u "$DOCKER_USERNAME" --password-stdin
+            set -x
+
+            # Adds the "prod" tag to the existing image in the registry.
+            # Nothing is built, nothing is uploaded - it is a pointer update.
+            docker buildx imagetools create \
+              -t "${DOCKER_IMAGE}:${PROD_TAG}" \
+              "${DOCKER_IMAGE}:${IMAGE_TAG}"
+
+            echo "prod now points at:"
+            docker buildx imagetools inspect "${DOCKER_IMAGE}:${PROD_TAG}" | head -3
+          '''
+        }
+      }
+    }
+  }
+
+  post {
+    always { sh 'docker logout >/dev/null 2>&1 || true' }
+  }
 }

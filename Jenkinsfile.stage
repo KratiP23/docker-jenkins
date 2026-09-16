@@ -1,30 +1,71 @@
+// Jenkinsfile.stage  -  job: app-stage  -  lives in the docker-jenkins repo
+//
+// Builds the stage branch ONCE, tags it with the git commit SHA, and pushes it
+// to Docker Hub. That is all it does.
+//
+// Verifying that the image actually runs happens in GitHub Actions
+// (.github/workflows/verify-image.yml in the docker-jenkins-app repo), on a
+// GitHub runner - nothing is run on this machine.
+
 pipeline {
-    agent { label 'linux-agent' }
-    environment {
-        DOCKER_IMAGE = 'krati07/jenkins-docker-demo'
-        CODE_REPO_URL = 'https://github.com/KratiP23/docker-jenkins-app.git'
+  agent { label 'linux-agent' }
+
+  options {
+    timestamps()
+    disableConcurrentBuilds()
+    buildDiscarder(logRotator(numToKeepStr: '30'))
+  }
+
+  environment {
+    DOCKER_IMAGE  = 'krati07/jenkins-docker-demo'
+    CODE_REPO_URL = 'https://github.com/KratiP23/docker-jenkins-app.git'
+  }
+
+  stages {
+
+    stage('Checkout stage branch') {
+      steps {
+        checkout([
+          $class: 'GitSCM',
+          branches: [[name: '*/stage']],
+          userRemoteConfigs: [[url: "${CODE_REPO_URL}"]]
+        ])
+        script {
+          // The commit SHA is the image identity. Same commit == same tag,
+          // so a given commit can only ever exist as one image.
+          env.IMAGE_TAG = 'sha-' + sh(returnStdout: true, script: 'git rev-parse --short=12 HEAD').trim()
+          currentBuild.displayName = "#${BUILD_NUMBER} ${env.IMAGE_TAG}"
+        }
+      }
     }
-    stages {
-        stage('Checkout code repo') {
-            steps {
-                checkout([$class: 'GitSCM', branches: [[name: 'stage']],
-                          userRemoteConfigs: [[url: "${CODE_REPO_URL}"]]])
-                script { env.GIT_SHA = sh(script: 'git rev-parse --short HEAD', returnStdout: true).trim() }
-            }
+
+    stage('Build and push') {
+      steps {
+        withCredentials([usernamePassword(
+          credentialsId: 'dockerhub-credentials',
+          usernameVariable: 'DOCKER_USERNAME',
+          passwordVariable: 'DOCKER_PASSWORD'
+        )]) {
+          sh '''
+            set +x
+            echo "$DOCKER_PASSWORD" | docker login -u "$DOCKER_USERNAME" --password-stdin
+            set -x
+
+            docker build --pull -t "${DOCKER_IMAGE}:${IMAGE_TAG}" .
+
+            # Never publish the same commit twice.
+            if docker manifest inspect "${DOCKER_IMAGE}:${IMAGE_TAG}" >/dev/null 2>&1; then
+              echo "${IMAGE_TAG} is already on Docker Hub - nothing to push."
+            else
+              docker push "${DOCKER_IMAGE}:${IMAGE_TAG}"
+            fi
+          '''
         }
-        stage('Build') {
-            steps { sh 'docker build -t ${DOCKER_IMAGE}:${GIT_SHA} .' }
-        }
-        stage('Push to Docker Hub') {
-            steps {
-                withCredentials([usernamePassword(credentialsId: 'dockerhub-credentials',
-                        usernameVariable: 'DOCKER_USERNAME', passwordVariable: 'DOCKER_PASSWORD')]) {
-                    sh '''
-                        echo "$DOCKER_PASSWORD" | docker login -u "$DOCKER_USERNAME" --password-stdin
-                        docker push ${DOCKER_IMAGE}:${GIT_SHA}
-                    '''
-                }
-            }
-        }
+      }
     }
+  }
+
+  post {
+    always { sh 'docker logout >/dev/null 2>&1 || true' }
+  }
 }
