@@ -1,0 +1,32 @@
+# .github/workflows/promote-prod.yml  -  in the docker-jenkins repo
+#
+# Pure approval gate. It builds nothing and deploys nothing. Its only job is to
+# sit in the "waiting" state until a required reviewer on the "production"
+# environment approves it, so that Jenkins has something to poll.
+
+name: Production Approval
+
+run-name: "Promote ${{ inputs.image_tag }} [${{ inputs.request_id }}]"
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Image tag being promoted (sha-xxxxxxxxxxxx)"
+        required: true
+        type: string
+      request_id:
+        description: "Identifier of the Jenkins build that asked for this"
+        required: true
+        type: string
+
+jobs:
+  production-approval:
+    runs-on: ubuntu-latest
+    environment:
+      name: production          # <- required reviewers here are what pauses the run
+    steps:
+      - name: Approved
+        run: |
+          echo "Approved for production: ${{ inputs.image_tag }}"
+          echo "Requested by: ${{ inputs.request_id }}"
