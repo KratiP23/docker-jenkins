@@ -74,7 +74,7 @@ pipeline {
     stage('Wait for approval on GitHub') {
       options { timeout(time: 25, unit: 'MINUTES') }
       steps {
-        withCredentials([string(credentialsId: 'github-token', variable: 'GITHUB_TOKEN')]) {
+        withCredentials([string(credentialsId: 'github-actions-token', variable: 'GITHUB_TOKEN')]) {
           sh '''
             set +x
 
